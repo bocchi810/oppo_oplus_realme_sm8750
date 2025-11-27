@@ -1,4 +1,4 @@
-name: 加速版构建 6.6.57 欧加真OKI内核
+name: (天玑特供)加速版构建 6.6.89 欧加真OKI内核
 
 env:
   TZ: Asia/Shanghai
@@ -19,19 +19,19 @@ on:
           - 'ksunext'
           - 'mksu'
           - 'ksu'
-      susfs_enable:
-        description: '是否开启susfs(用于增强隐藏环境挂载功能; 可能轻微增加耗电，上游更新导致不稳定时或不需要可关闭)'
-        required: true
-        type: boolean
-        default: 'true'
       kpm_enable:
-        description: '是否开启kpm(仅对sukisu生效; 可能轻微增加耗电，不需要可保持默认关闭)'
+        description: '是否开启kpm(仅对sukisu生效;可能轻微增加耗电; 可能轻微增加耗电，不需要可保持默认关闭)'
         required: true
         type: choice
         default: 'false'
         options:
           - 'true'
           - 'false'
+      susfs_enable:
+        description: '是否开启susfs(用于增强隐藏环境挂载功能; 可能轻微增加耗电，上游更新导致不稳定时或不需要可关闭)'
+        required: true
+        type: boolean
+        default: 'true'
       lz4_enable:
         description: '是否安装 lz4 1.10.0+zstd 1.5.7 补丁及 LZ4KD 补丁(0=均不安装,1=安装lz4&zstd补丁,2=安装lz4kd补丁,3=均安装,默认1)'
         required: true
@@ -43,7 +43,7 @@ on:
           - '2'
           - '3'
       bbr_enable:
-        description: "是否启用bbr算法(优化上行数据,对手机日用无太大意义甚至可能负优化;false关闭,true仅加入算法,default启用算法并设为默认)"
+        description: "是否启用bbr算法(优化上行数据,对手机日用无太大意义甚至可能负优化;false关闭,true仅加入算法,default添加算法并设为默认)"
         required: true
         type: choice
         default: 'false'
@@ -52,7 +52,7 @@ on:
           - 'true'
           - 'default'
       better_net:
-        description: '是否开启网络功能拓展配置(用于为ipset及需要iptables等高级网络功能内核支持的程序提供支持)'
+        description: '是否开启网络功能拓展配置(用于为ipset及需要iptables等高级网络功能内核支持的程序提供支持,天玑机型可能导致bug)'
         required: true
         type: choice
         default: 'false'
@@ -107,9 +107,9 @@ jobs:
           #sudo apt-get install -y --no-install-recommends curl bison flex make binutils git perl gcc python3 python-is-python3 bc libssl-dev libelf-dev zip unzip ccache
           
           echo "正在克隆源码仓库..."
-          aria2c -s16 -x16 -k1M https://github.com/cctv18/android_kernel_common_oneplus_sm8750/archive/refs/heads/oneplus/sm8750_v_15.0.1_pad_2_pro.zip -o common.zip && 
+          aria2c -s16 -x16 -k1M https://github.com/cctv18/android_kernel_oneplus_mt6991/archive/refs/heads/oneplus/mt6991_v_15.0.2_ace5_ultra_6.6.89.zip -o common.zip && 
           unzip -q common.zip && 
-          mv "android_kernel_common_oneplus_sm8750-oneplus-sm8750_v_15.0.1_pad_2_pro" common &&
+          mv "android_kernel_oneplus_mt6991-oneplus-mt6991_v_15.0.2_ace5_ultra_6.6.89" common &&
           rm -rf common.zip &
           
           echo "正在克隆llvm-clang18工具链..." &&
@@ -134,21 +134,21 @@ jobs:
 
       - name: 配置ccache目录
         run: |
-          echo "CCACHE_DIR=$HOME/.ccache_6.6.57" >> $GITHUB_ENV
+          echo "CCACHE_DIR=$HOME/.ccache_mtk_6.6.89" >> $GITHUB_ENV
           echo "CCACHE_MAXSIZE=3G" >> $GITHUB_ENV
           echo "当前磁盘空间："
           df -h
-          echo "当前构建内核版本：6.6.57"
+          echo "当前构建内核版本：6.6.89"
 
       - name: 载入当前版本内核的 ccache缓存
         uses: actions/cache@v4
         id: ccache-restore
         with:
           path: ${{ env.CCACHE_DIR }}
-          key: ccache-neov4-6.6.57-${{ runner.os }}-main
+          key: ccache-neov4-mtk_6.6.89-${{ runner.os }}-main
           restore-keys: |
-            ccache-neov4-6.6.57-${{ runner.os }}-
-            ccache-neov4-6.6.57-
+            ccache-neov4-mtk_6.6.89-${{ runner.os }}-
+            ccache-neov4-mtk_6.6.89-
       
       - name: 初始化并配置ccache
         run: |
@@ -351,10 +351,12 @@ jobs:
             cd kernel_workspace
             git clone https://github.com/cctv18/oppo_oplus_realme_sm8750.git
             cp ./oppo_oplus_realme_sm8750/zram_patch/001-lz4.patch ./common/
+            cp ./oppo_oplus_realme_sm8750/zram_patch/001-lz4-clearMake.patch ./common/
             cp ./oppo_oplus_realme_sm8750/zram_patch/lz4armv8.S ./common/lib
             cp ./oppo_oplus_realme_sm8750/zram_patch/002-zstd.patch ./common/
             cd ./common
             git apply -p1 < 001-lz4.patch || true
+            git apply -p1 < 001-lz4-clearMake.patch || true
             patch -p1 < 002-zstd.patch || true
           fi
 
@@ -720,11 +722,11 @@ jobs:
       - name: 设置环境变量
         run: |
           if [[ -n "${{ github.event.inputs.kernel_suffix }}" ]]; then
-            FULL_VERSION=${{ format('{0}.57-{1}', env.KERNEL_VERSION, github.event.inputs.kernel_suffix) }}
+            FULL_VERSION=${{ format('{0}.89-{1}', env.KERNEL_VERSION, github.event.inputs.kernel_suffix) }}
             echo "FULL_VERSION=$FULL_VERSION" >> $GITHUB_ENV
             export FULL_VERSION=$FULL_VERSION
           else
-            FULL_VERSION=${{ format('{0}.57-{1}', env.KERNEL_VERSION, env.KERNEL_NAME) }}
+            FULL_VERSION=${{ format('{0}.89-{1}', env.KERNEL_VERSION, env.KERNEL_NAME) }}
             echo "FULL_VERSION=$FULL_VERSION" >> $GITHUB_ENV
             export FULL_VERSION=$FULL_VERSION
           fi
@@ -776,10 +778,10 @@ jobs:
           tag_name: "${{ env.TAG_HEAD }}-${{ env.TIME }}"
           name: "${{ env.TAG_HEAD }}-${{ env.FULL_VERSION }}"
           body: |
-            ### 📱 欧加真 Android 15 ${{ env.KSU_TYPENAME }} SM8750 通用内核 | 构建信息
+            ### 📱 欧加真 Android 15 ${{ env.KSU_TYPENAME }} MT6991 通用内核 | 构建信息
             - 内核版本号: ${{ env.FULL_VERSION }}
             - 编译时间: ${{ env.TIME_FORM }}
-            - 机型：欧加真骁龙8Elite 6.6.57 Android 15内核通用（基于一加平板2Pro 6.6.57 版官方OKI源码）
+            - 机型：欧加真天玑9400+ 6.6.89 Android 15内核通用（基于一加Ace5 Ultra 6.6.89 版官方OKI源码）
             - 特性：${{ env.KSU_TYPENAME }} + 风驰内核
             - susfs支持：${{ github.event.inputs.susfs_enable }}
             - KPM支持 (仅对sukisu生效)：${{ github.event.inputs.kpm_enable }}
