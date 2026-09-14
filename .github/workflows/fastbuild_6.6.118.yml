@@ -1,4 +1,4 @@
-name: 6.6.118 欧加真OKI内核快速构建
+name: 6.6.118 欧加真OKI内核快速构建（含 hybridswap 空指针守卫）
 
 env:
   TZ: Asia/Shanghai
@@ -557,6 +557,20 @@ jobs:
           sed -i 's/${scm_version}//' ./common/scripts/setlocalversion
           echo "CONFIG_LOCALVERSION_AUTO=n" >> ./common/arch/arm64/configs/gki_defconfig
            
+      - name: 应用 hybridswap 空指针守卫补丁
+        run: |
+          cd kernel_workspace
+          echo "正在应用 hybridswap 空指针守卫（编进 Image，随 AnyKernel3 一起刷入）..."
+          wget -q https://github.com/$GITHUB_REPOSITORY/raw/refs/heads/$GITHUB_REF_NAME/kernel-patches/0001-hybridswap-lpc-null-guard.patch
+          cd common
+          patch -p1 < ../0001-hybridswap-lpc-null-guard.patch
+          echo "--- kernel/Makefile 中的守卫条目 ---"
+          grep -n "oplus_hybridswap_lpc_guard" kernel/Makefile
+          echo "--- 确保 kprobe / kallsyms 支持 ---"
+          grep -q "^CONFIG_KPROBES=y" arch/arm64/configs/gki_defconfig || echo "CONFIG_KPROBES=y" >> arch/arm64/configs/gki_defconfig
+          grep -q "^CONFIG_KALLSYMS_ALL=y" arch/arm64/configs/gki_defconfig || echo "CONFIG_KALLSYMS_ALL=y" >> arch/arm64/configs/gki_defconfig
+          grep -E "^CONFIG_(KPROBES|KALLSYMS_ALL)=" arch/arm64/configs/gki_defconfig
+
       - name: 构建内核
         run: |
           WORKDIR="$(pwd)"
@@ -640,6 +654,15 @@ jobs:
           ccache -s
           echo "编译后空间:"
           df -h
+
+      - name: 校验守卫已编入镜像
+        run: |
+          cd kernel_workspace/common
+          test -f out/kernel/oplus_hybridswap_lpc_guard.o
+          nm out/vmlinux | grep -i lpc_guard || true
+          strings out/vmlinux | grep -m1 "hybridswap-lpc-guard"
+          strings out/arch/arm64/boot/Image | grep -m1 "hybridswap-lpc-guard"
+          echo "OK：hybridswap 空指针守卫已在内核镜像中"
 
       - name: 保存新的 ccache 缓存
         if: inputs.ccache_update || steps.ccache-restore.outputs.cache-hit != 'true'
