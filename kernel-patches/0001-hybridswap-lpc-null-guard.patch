@@ -1,0 +1,157 @@
+diff --git a/kernel/oplus_hybridswap_lpc_guard.c b/kernel/oplus_hybridswap_lpc_guard.c
+new file mode 100644
+--- /dev/null
++++ b/kernel/oplus_hybridswap_lpc_guard.c
+@@ -0,0 +1,139 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * oplus_hybridswap_lpc_guard.c  —  用户态可见的崩溃规避（内置进内核镜像）
++ *
++ * 背景（见设备上的 ramoops 现场）：
++ *   oplus_bsp_hybridswap_zram 模块的
++ *       static void hybridswap_life_protect_ctrl_work(struct work_struct *work)
++ *   里 stat 没有判空：
++ *       struct hybridswap_stat *stat = hybridswap_get_stat_obj();   // 可能是 NULL
++ *       if (tm.tm_hour > 2)
++ *               atomic64_set(&stat->reclaimin_bytes_daily, 0);      // NULL + 0x18 → Oops
++ *   而 hybridswap_global_setting_deinit() 释放 stat 并置 NULL 时没有
++ *   del_timer_sync(&global_settings.lpc_timer)，那个 24 小时周期、自我重排的定时器
++ *   仍然会到期并调度这个 work。
++ *
++ * 本文件不修改厂商模块的任何字节，只在两个"一天一次"的冷路径入口注册 kprobe：
++ *   hybridswap_life_protect_ctrl_work    —— 崩溃点
++ *   hybridswap_life_protect_ctrl_timer   —— 悬挂定时器的回调
++ * 当 hybridswap_get_stat_obj() 返回 NULL 时，直接把 pc 指回 LR 让函数立即返回，
++ * 原函数一行都不执行；stat 正常时完全不影响原有逻辑（与源码补丁等价）。
++ *
++ * 依赖：CONFIG_KPROBES=y、CONFIG_KALLSYMS_ALL=y（该机型 stock 配置均满足）。
++ */
++
++#define pr_fmt(fmt) "hybridswap-lpc-guard: " fmt
++
++#include <linux/init.h>
++#include <linux/kallsyms.h>
++#include <linux/kprobes.h>
++#include <linux/module.h>
++#include <linux/ptrace.h>
++#include <linux/workqueue.h>
++
++#if IS_ENABLED(CONFIG_KPROBES)
++
++typedef void *(*hybridswap_get_stat_obj_t)(void);
++
++static hybridswap_get_stat_obj_t get_stat_obj;
++
++static bool hooked_work;
++static bool hooked_timer;
++static unsigned long guard_hits;
++static int retries = 600;	/* 600 * 500ms = 5min，等厂商模块加载 */
++
++static struct kprobe kp_work = {
++	.symbol_name = "hybridswap_life_protect_ctrl_work",
++};
++
++static struct kprobe kp_timer = {
++	.symbol_name = "hybridswap_life_protect_ctrl_timer",
++};
++
++/*
++ * kprobe pre_handler 运行在原子上下文：这里只调用一个普通取值函数，不做任何
++ * 可能睡眠的操作（kallsyms 查找已在安装阶段完成）。
++ */
++static int lpc_guard_pre_handler(struct kprobe *p, struct pt_regs *regs)
++{
++	hybridswap_get_stat_obj_t fn = READ_ONCE(get_stat_obj);
++
++	if (!fn || fn() != NULL)
++		return 0;	/* stat 正常：完全走原逻辑 */
++
++	/*
++	 * stat 已被 deinit 释放并置 NULL。此时寄存器里只有进入函数时的现场，
++	 * 直接把返回地址放回 pc，函数等价于"立即 return"，不会写 NULL + 0x18。
++	 */
++	regs->pc = regs->regs[30];	/* x30 == LR */
++	guard_hits++;
++	return 1;			/* 告诉 kprobe 框架：pc 已处理好，无需单步 */
++}
++
++static void lpc_guard_install(struct work_struct *work);
++static DECLARE_DELAYED_WORK(lpc_guard_work, lpc_guard_install);
++
++static void lpc_guard_install(struct work_struct *work)
++{
++	bool done = true;
++
++	if (!get_stat_obj)
++		get_stat_obj = (hybridswap_get_stat_obj_t)
++			kallsyms_lookup_name("hybridswap_get_stat_obj");
++
++	if (!get_stat_obj) {
++		done = false;
++	} else {
++		if (!hooked_work) {
++			kp_work.pre_handler = lpc_guard_pre_handler;
++			if (register_kprobe(&kp_work) == 0) {
++				hooked_work = true;
++				pr_info("hooked hybridswap_life_protect_ctrl_work\n");
++			} else {
++				kp_work.addr = NULL;	/* 允许下次重试重新解析 */
++				done = false;
++			}
++		}
++		if (!hooked_timer) {
++			kp_timer.pre_handler = lpc_guard_pre_handler;
++			if (register_kprobe(&kp_timer) == 0) {
++				hooked_timer = true;
++				pr_info("hooked hybridswap_life_protect_ctrl_timer\n");
++			} else {
++				kp_timer.addr = NULL;
++				done = false;
++			}
++		}
++	}
++
++	if (done) {
++		pr_info("ready (work=%d timer=%d)\n", hooked_work, hooked_timer);
++		return;
++	}
++
++	if (--retries > 0) {
++		schedule_delayed_work(&lpc_guard_work, msecs_to_jiffies(500));
++	} else {
++		pr_warn("giving up: stat_obj=%px work=%d timer=%d (module not loaded?)\n",
++			get_stat_obj, hooked_work, hooked_timer);
++	}
++}
++
++static int __init lpc_guard_init(void)
++{
++	/* 厂商模块由 init 在启动后段加载，这里延迟重试等待它出现 */
++	schedule_delayed_work(&lpc_guard_work, msecs_to_jiffies(3000));
++	return 0;
++}
++late_initcall(lpc_guard_init);
++
++#else /* !CONFIG_KPROBES */
++
++static int __init lpc_guard_init(void)
++{
++	pr_warn("CONFIG_KPROBES is disabled, guard inactive\n");
++	return 0;
++}
++late_initcall(lpc_guard_init);
++
++#endif
+
+diff --git a/kernel/Makefile b/kernel/Makefile
+--- a/kernel/Makefile
++++ b/kernel/Makefile
+@@ -145,6 +145,8 @@
+ 
+ obj-$(CONFIG_SCF_TORTURE_TEST) += scftorture.o
+ 
++obj-y += oplus_hybridswap_lpc_guard.o
++
+ $(obj)/configs.o: $(obj)/config_data.gz
+ 
+ targets += config_data config_data.gz
