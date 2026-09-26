@@ -2,7 +2,7 @@ diff --git a/kernel/oplus_hybridswap_lpc_guard.c b/kernel/oplus_hybridswap_lpc_g
 new file mode 100644
 --- /dev/null
 +++ b/kernel/oplus_hybridswap_lpc_guard.c
-@@ -0,0 +1,139 @@
+@@ -0,0 +1,143 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * oplus_hybridswap_lpc_guard.c  —  用户态可见的崩溃规避（内置进内核镜像）
@@ -38,7 +38,11 @@ new file mode 100644
 +
 +#if IS_ENABLED(CONFIG_KPROBES)
 +
-+typedef void *(*hybridswap_get_stat_obj_t)(void);
++/* 返回类型必须与厂商模块里的真实原型一致（struct hybridswap_stat *(*)(void)），
++ * 否则 kCFI 会在间接调用处直接 panic（2026-09-26 那次重启的根因）。
++ * 只需前置声明即可：kCFI 类型哈希与结构体是否完整定义无关。 */
++struct hybridswap_stat;
++typedef struct hybridswap_stat *(*hybridswap_get_stat_obj_t)(void);
 +
 +static hybridswap_get_stat_obj_t get_stat_obj;
 +
