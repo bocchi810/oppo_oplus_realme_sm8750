@@ -64,10 +64,10 @@ on:
         type: boolean
         default: 'true'
       lz4_enable:
-        description: '是否安装 lz4 1.10.0 + zstd 1.5.7 补丁'
+        description: '是否尝试 lz4 1.10.0 + zstd 1.5.7 补丁(天玑 6.6.118 上 lz4 补丁套不上，会自动跳过保留官方 lz4)'
         required: true
         type: boolean
-        default: 'true'
+        default: 'false'
       lz4kd_enable:
         description: '是否安装 LZ4KD 补丁(与 lz4 补丁二选一，需刷配套 zram.ko)'
         required: true
@@ -341,10 +341,24 @@ jobs:
           cp ./$GITHUB_ACTOR/zram_patch/lz4armv8.S ./common/lib
           cp ./$GITHUB_ACTOR/zram_patch/002-zstd.patch ./common/
           cd ./common
-          git apply -p1 < 001-lz4.patch || echo "::warning::001-lz4.patch 未完全套用"
-          git apply -p1 < 001-lz4-clearMake.patch || echo "::warning::001-lz4-clearMake.patch 未完全套用"
-          patch -p1 < 002-zstd.patch || echo "::warning::002-zstd.patch 未完全套用"
-          grep -q "1\.10\.0" lib/lz4/lz4.c || { echo "::error::lz4 1.10.0 未生效"; exit 1; }
+          # 001-lz4.patch 按 SM8750 的 lib/lz4 布局生成；天玑 6.6.118 树上
+          # lib/lz4/lz4hc_compress.c 的删除 hunk 对不上（实测 git apply 报
+          # "打补丁失败：lib/lz4/lz4hc_compress.c:1"）。git apply 是原子操作，
+          # 失败时整棵树保持官方 lz4 原样，不会留下半套，所以这里只尝试不硬失败。
+          if git apply -p1 < 001-lz4.patch; then
+            echo "lz4 1.10.0 补丁已套用"
+            git apply -p1 < 001-lz4-clearMake.patch || echo "::warning::001-lz4-clearMake.patch 未套用"
+          else
+            echo "::warning::001-lz4.patch 不适用于天玑 6.6.118 源码（lib/lz4 布局差异），保留官方 lz4"
+          fi
+          patch -p1 -F 3 --batch --no-backup-if-mismatch < 002-zstd.patch || echo "::warning::002-zstd.patch 未完全套用"
+          echo "--- 当前 lib/lz4 布局 ---"
+          ls lib/lz4/ | head -12
+          if [ -f lib/lz4/lz4.c ] && [ -f lib/lz4/lz4.h ]; then
+            echo "lz4: 1.10 布局（补丁生效）"
+          else
+            echo "::warning::lz4 保持官方布局（1.10 补丁未生效），不影响编译"
+          fi
 
       - name: 应用 LZ4KD 补丁
         if: inputs.lz4kd_enable

@@ -141,3 +141,27 @@ adb shell 'dmesg | grep -iE "disagrees about version|Unknown symbol|version magi
 
 - 本 workflow **独立**，不改动 `fastbuild_6.6.50.yml` / `fastbuild_6.6.89_mtk.yml` / `fastbuild_6.6.118.yml` / `fastbuild_6.6.118_mtk_noroot.yml`。
 - 旧的天玑 workflow 把 `KERNEL_NAME` 写成了 SM8750 的值（`…g29d86c5fc9dd-abogki428889875-4k`），编出来的 `uname -r` 会是一加 13 的串。按 $1 的分析，这**不会**让模块加载失败（版本前缀被忽略），但工具/日志里会显示成别的机型，属于该修的脏数据——本 workflow 已按本机实测值改正。
+
+---
+
+## 7. 首跑记录：lz4 补丁为什么 error（2026-11-12）
+
+第一次在 Actions 上跑（run 43233516674 / job 131234741226），第 10 步 `应用 lz4 1.10.0 & zstd 1.5.7 补丁` 失败。两个原因叠加：
+
+1. **断言写错**：我加的 `grep -q "1.10.0" lib/lz4/lz4.c` 永远不可能通过——`1.10.0` 这个字面量只出现在 `lib/lz4/lz4.h` 的注释里，`lz4.c` 里没有（版本宏是 `LZ4_VERSION_MAJOR 1` / `MINOR 10` / `RELEASE 0`）。
+2. **补丁确实套不上**：`zram_patch/001-lz4.patch` 是按 SM8750 的 `lib/lz4` 布局生成的，天玑 6.6.118 树上实测 `git apply` 报
+
+   ~~~text
+   打补丁失败：lib/lz4/lz4hc_compress.c:1
+   打补丁失败：fs/f2fs/lz4armv8/lz4accel.h: 没有那个文件或目录
+   ~~~
+
+   即：该补丁要删除 `lib/lz4/lz4hc_compress.c` 并重命名 `fs/f2fs/lz4armv8/*`，天玑源码里这两处的上下文不同。**结论：这套 lz4 1.10 补丁目前不适用于 MT6991 6.6.118。**
+
+对应改动：
+
+- lz4 步骤改为「尝试套用、失败即跳过」：`git apply` 是原子操作，失败时整棵树保持官方 lz4 原样，不会留下半套；并在日志里明确打印当前是哪种布局。
+- `lz4_enable` 默认值改为 **false**（想试就手动打开，最坏情况也只是跳过）。
+- 顺带把 `002-zstd.patch` 改成 `patch -p1 -F 3 --batch --no-backup-if-mismatch`，避免 CI 里因交互式反问卡住。
+
+这次失败也说明前面 9 步全部通过：源码下载、clang18 工具链、ccache、KernelSU 配置、**SUSFS 补丁（含断言）** 都成功了。
